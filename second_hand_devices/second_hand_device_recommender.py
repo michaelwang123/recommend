@@ -32,7 +32,13 @@ class DeviceFeatureExtractor:
         
         # 基本特征
         features['brand'] = self.brand_encoder.fit_transform(device_data['brand'])
-        features['model'] = self.model_encoder.fit_transform(device_data['model'])
+        
+        # 检查是否有model字段，如果没有则使用brand作为代替
+        if 'model' in device_data.columns:
+            features['model'] = self.model_encoder.fit_transform(device_data['model'])
+        else:
+            features['model'] = self.model_encoder.fit_transform(device_data['brand'])
+        
         features['category'] = self.category_encoder.fit_transform(device_data['category'])
         features['condition'] = self.condition_encoder.fit_transform(device_data['condition'])
         
@@ -75,8 +81,15 @@ class SecondHandDeviceRecommender(nn.Module):
         self._init_weights()
     
     def _init_weights(self):
+        # 使用Xavier初始化
         for embedding in [self.user_embedding, self.device_embedding, self.brand_embedding]:
-            nn.init.normal_(embedding.weight, std=0.1)
+            nn.init.xavier_uniform_(embedding.weight)
+        
+        # 初始化深度网络层
+        for layer in self.deep_layers:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+                nn.init.constant_(layer.bias, 0)
     
     def forward(self, user_ids, device_ids, brand_ids):
         user_emb = self.user_embedding(user_ids)
@@ -284,28 +297,90 @@ class SecondHandRecommendationSystem:
         brand_ids = torch.LongTensor(data['brand_encoded'].values)
         ratings = torch.FloatTensor(data['rating'].values)
         
-        dataset = TensorDataset(user_ids, device_ids, brand_ids, ratings)
-        dataloader = DataLoader(dataset, batch_size=256, shuffle=True)
+        # 标准化评分到 [0,1] 范围
+        ratings = (ratings - ratings.min()) / (ratings.max() - ratings.min())
         
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        dataset = TensorDataset(user_ids, device_ids, brand_ids, ratings)
+        dataloader = DataLoader(dataset, batch_size=128, shuffle=True)
+        
+        # 使用较低的学习率
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.0001, weight_decay=1e-5)
         criterion = nn.MSELoss()
         
         self.model.train()
         for epoch in range(epochs):
             total_loss = 0
+            batch_count = 0
+            
             for batch in dataloader:
                 user_batch, device_batch, brand_batch, rating_batch = batch
                 
                 optimizer.zero_grad()
                 predictions = self.model(user_batch, device_batch, brand_batch)
+                
+                # 将预测值限制在合理范围内
+                predictions = torch.sigmoid(predictions)
+                
                 loss = criterion(predictions, rating_batch)
+                
+                # 检查梯度是否有效
+                if torch.isnan(loss) or torch.isinf(loss):
+                    logger.warning(f"Loss is {loss.item()}, skipping batch")
+                    continue
+                
                 loss.backward()
+                
+                # 梯度裁剪
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                
                 optimizer.step()
                 
                 total_loss += loss.item()
+                batch_count += 1
             
+            avg_loss = total_loss / max(batch_count, 1)
             if (epoch + 1) % 10 == 0:
-                logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}")
+                logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}")
+    
+    def recommend_for_user(self, user_id, k=10):
+        """为用户推荐设备"""
+        if not self.is_trained:
+            raise ValueError("模型未训练")
+        
+        try:
+            user_encoded = self.user_encoder.transform([user_id])[0]
+        except ValueError:
+            return []
+        
+        self.model.eval()
+        with torch.no_grad():
+            user_tensor = torch.LongTensor([user_encoded])
+            device_scores = []
+            
+            # 为每个设备计算评分
+            for device_encoded in range(len(self.device_encoder.classes_)):
+                device_tensor = torch.LongTensor([device_encoded])
+                # 使用最常见的品牌作为默认值
+                brand_tensor = torch.LongTensor([0])
+                
+                score = self.model(user_tensor, device_tensor, brand_tensor)
+                device_scores.append((device_encoded, score.item()))
+            
+            # 排序并返回前k个
+            device_scores.sort(key=lambda x: x[1], reverse=True)
+            
+            recommendations = []
+            for device_encoded, score in device_scores[:k]:
+                try:
+                    device_id = self.device_encoder.inverse_transform([device_encoded])[0]
+                    recommendations.append({
+                        'device_id': device_id,
+                        'score': score
+                    })
+                except:
+                    continue
+            
+            return recommendations
     
     def recommend_similar_devices(self, device_id, top_k=10):
         """推荐相似设备"""
@@ -326,8 +401,11 @@ class SecondHandRecommendationSystem:
         
         similar_devices = []
         for idx in top_k_indices:
-            similar_device_id = self.device_encoder.inverse_transform([idx.item()])[0]
-            similar_devices.append(similar_device_id)
+            try:
+                similar_device_id = self.device_encoder.inverse_transform([idx.item()])[0]
+                similar_devices.append(similar_device_id)
+            except:
+                continue
         
         return similar_devices
 
