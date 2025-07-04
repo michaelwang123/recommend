@@ -21,15 +21,32 @@
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+### 1. 创建虚拟环境
 
 ```bash
+python3 -m venv recommend
+```
+
+### 2. 激活虚拟环境
+
+**在 macOS/Linux 上：**
+```bash
+source recommend/bin/activate
+```
+
+**在 Windows 上：**
+```bash
+recommend\Scripts\activate
+```
+
+### 3. 升级pip并安装依赖
+
+```bash
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 2. 基础推荐系统
-
-运行基础的内容推荐和协同过滤：
+### 4. 运行项目
 
 ```bash
 python similarity_recommendation_basic.py
@@ -40,7 +57,13 @@ python similarity_recommendation_basic.py
 - 协同过滤推荐（Collaborative Filtering）
 - 余弦相似度计算
 
-### 3. 高级深度学习推荐
+### 5. 完成后退出虚拟环境
+
+```bash
+deactivate
+```
+
+### 6. 高级深度学习推荐
 
 运行Item2Vec和深度学习推荐：
 
@@ -54,7 +77,7 @@ python advanced_similarity_recommender.py
 - 自注意力机制
 - 嵌入可视化
 
-### 4. 生产级推荐系统
+### 7. 生产级推荐系统
 
 运行完整的生产环境推荐系统：
 
@@ -293,3 +316,7 @@ total_loss = ctr_loss + 0.5 * cvr_loss
 ---
 
 ⭐ 如果这个项目对你有帮助，请给它一个星标！ 
+
+# 确保使用合适的Python版本
+python --version
+# 应该显示 Python 3.7+ 以确保PyTorch兼容性 
