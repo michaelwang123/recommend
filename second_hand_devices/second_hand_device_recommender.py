@@ -35,7 +35,7 @@ class DeviceFeatureExtractor:
         
         # 检查是否有model字段，如果没有则使用brand作为代替
         if 'model' in device_data.columns:
-            features['model'] = self.model_encoder.fit_transform(device_data['model'])
+        features['model'] = self.model_encoder.fit_transform(device_data['model'])
         else:
             features['model'] = self.model_encoder.fit_transform(device_data['brand'])
         
@@ -402,8 +402,8 @@ class SecondHandRecommendationSystem:
         similar_devices = []
         for idx in top_k_indices:
             try:
-                similar_device_id = self.device_encoder.inverse_transform([idx.item()])[0]
-                similar_devices.append(similar_device_id)
+            similar_device_id = self.device_encoder.inverse_transform([idx.item()])[0]
+            similar_devices.append(similar_device_id)
             except:
                 continue
         
