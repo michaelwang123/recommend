@@ -1,8 +1,6 @@
 基于用户行为数据，训练一个推荐模型，用于推荐二手设备。
 
 
-编写python脚本，帮我在mysql中创建一张表，并生成50000条不连续的userid和itemid以及rating。但用户分布整体满足generate_user_behavior_data函数的用户分布，方便我后续验证。
-
 
 
 ### MySQL表结构
