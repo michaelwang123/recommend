@@ -259,7 +259,8 @@ class MeaningfulUserEmbedding:
             print(f"\n👤 用户{user_id} ({user_name}):")
             
             # 获取该用户的历史行为
-            user_history = df[df['user_id'] == user_id]
+            #user_history = df[df['user_id'] == user_id]
+            user_history = df.query('user_id == @user_id')
             if len(user_history) > 0:
                 print(f"   历史行为: 对物品 {user_history['item_id'].tolist()[:5]} 的评分")
             
