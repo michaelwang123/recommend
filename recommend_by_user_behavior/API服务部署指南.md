@@ -4,12 +4,11 @@
 
 在训练并保存了推荐模型后，你可以通过以下两种方式对外提供接口服务：
 
-1. **Python API 服务**（推荐）- 直接使用 FastAPI 构建
-2. **Go 客户端调用** - 通过 HTTP 调用 Python API
+**Python API 服务** 
 
 ---
 
-## 🐍 方案一：Python API 服务
+## 🐍 Python API 服务
 
 ### 1. 安装依赖
 
