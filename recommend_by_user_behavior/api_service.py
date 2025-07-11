@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
+from contextlib import asynccontextmanager
 import uvicorn
 import os
 from recommend import MySQLRecommendationSystem
@@ -35,21 +36,15 @@ class HealthResponse(BaseModel):
     num_users: int
     num_items: int
 
-# 创建 FastAPI 应用
-app = FastAPI(
-    title="推荐系统 API",
-    description="基于 PyTorch 的个性化推荐服务",
-    version="1.0.0"
-)
-
 # 全局推荐系统实例
 recommender = None
 
-@app.on_event("startup")
-async def startup_event():
-    """启动时加载模型"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
     global recommender
     
+    # 启动时执行
     try:
         print("🚀 启动推荐系统 API 服务...")
         
@@ -72,6 +67,19 @@ async def startup_event():
     except Exception as e:
         print(f"❌ 启动失败: {e}")
         recommender = None
+    
+    yield
+    
+    # 关闭时执行（如果需要清理资源）
+    print("🔄 关闭推荐系统 API 服务...")
+
+# 创建 FastAPI 应用
+app = FastAPI(
+    title="推荐系统 API",
+    description="基于 PyTorch 的个性化推荐服务",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 @app.get("/")
 async def root():
