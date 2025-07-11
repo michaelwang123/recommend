@@ -109,7 +109,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-recommend/
 pytorch_recommender/
 
 # Spyder project settings
