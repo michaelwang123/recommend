@@ -1,8 +1,5 @@
 基于用户行为数据，训练一个推荐模型，用于推荐二手设备。
 
-
-
-
 ### MySQL表结构
 ```sql
 CREATE TABLE user_behavior (
