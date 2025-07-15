@@ -705,69 +705,178 @@ class SecondHandRecommendationSystem:
             if (epoch + 1) % 10 == 0:
                 logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}")
     
-    def recommend_for_user(self, user_id, k=10):
+    
+    def recommend_top_n_devices_for_user(self, user_id, device_data, interaction_data=None, top_n=10, exclude_interacted=True):
         """
-        为用户推荐设备
+        为指定用户推荐TopN个设备（改进版）
         
         基于训练好的深度学习模型，为指定用户生成个性化的设备推荐。
+        相比原版函数，这个版本：
+        1. 正确处理每个设备的品牌信息
+        2. 可以过滤掉用户已经交互过的设备
+        3. 提供更详细的设备信息
+        4. 支持评分标准化
         
         参数:
             user_id: 用户ID
-            k (int): 推荐设备数量，默认10个
+            device_data (pandas.DataFrame): 设备数据，包含device_id、brand等信息
+            interaction_data (pandas.DataFrame): 交互数据，用于过滤已交互设备
+            top_n (int): 推荐设备数量，默认10个
+            exclude_interacted (bool): 是否排除用户已交互的设备，默认True
             
         返回:
-            list: 推荐结果列表，每个元素包含设备ID和评分
+            list: 推荐结果列表，每个元素包含设备ID、评分、设备详细信息
             
-        推荐流程:
-        1. 用户ID编码：将用户ID转换为模型可理解的编码
-        2. 批量预测：为该用户预测对所有设备的评分
-        3. 排序过滤：按评分排序，返回前k个最高评分的设备
+        示例:
+            recommendations = recommender.recommend_top_n_devices_for_user(
+                user_id=12, 
+                device_data=devices_df,
+                interaction_data=interactions_df,
+                top_n=5,
+                exclude_interacted=True
+            )
         """
         if not self.is_trained:
-            raise ValueError("模型未训练")
+            raise ValueError("模型未训练，请先调用train()方法")
         
         # === 第一步：用户ID编码 ===
         try:
             user_encoded = self.user_encoder.transform([user_id])[0]
         except ValueError:
-            # 如果用户ID不在训练数据中，返回空列表
+            logger.warning(f"用户ID {user_id} 不在训练数据中")
             return []
         
-        # === 第二步：批量预测 ===
+        # === 第二步：获取用户已交互的设备（用于过滤）===
+        interacted_devices = set()
+        if exclude_interacted and interaction_data is not None:
+            user_interactions = interaction_data[interaction_data['user_id'] == user_id]
+            interacted_devices = set(user_interactions['device_id'].values)
+        
+        # === 第三步：批量预测所有设备评分 ===
         self.model.eval()  # 设置为评估模式
-        with torch.no_grad():  # 禁用梯度计算，节省内存
+        device_scores = []
+        
+        with torch.no_grad():  # 禁用梯度计算，节省内存和计算
             user_tensor = torch.LongTensor([user_encoded])
-            device_scores = []
             
-            # 为每个设备计算该用户的预测评分
-            for device_encoded in range(len(self.device_encoder.classes_)):
-                device_tensor = torch.LongTensor([device_encoded])
-                # 使用最常见的品牌作为默认值（简化处理）
-                brand_tensor = torch.LongTensor([0])
+            # 遍历所有设备
+            for _, device_row in device_data.iterrows():
+                device_id = device_row['device_id']
                 
-                # 使用模型预测评分
-                score = self.model(user_tensor, device_tensor, brand_tensor)
-                device_scores.append((device_encoded, score.item()))
-            
-            # === 第三步：排序和过滤 ===
-            # 按评分从高到低排序
-            device_scores.sort(key=lambda x: x[1], reverse=True)
-            
-            # 转换为最终的推荐结果
-            recommendations = []
-            for device_encoded, score in device_scores[:k]:
-                try:
-                    # 将编码转换回原始设备ID
-                    device_id = self.device_encoder.inverse_transform([device_encoded])[0]
-                    recommendations.append({
-                        'device_id': device_id,
-                        'score': score
-                    })
-                except:
-                    # 如果转换失败，跳过这个设备
+                # 如果需要排除已交互设备，则跳过
+                if exclude_interacted and device_id in interacted_devices:
                     continue
+                
+                try:
+                    # 编码设备ID和品牌ID
+                    device_encoded = self.device_encoder.transform([device_id])[0]
+                    brand_encoded = self.brand_encoder.transform([device_row['brand']])[0]
+                    
+                    # 转换为张量
+                    device_tensor = torch.LongTensor([device_encoded])
+                    brand_tensor = torch.LongTensor([brand_encoded])
+                    
+                    # === 模型预测 ===
+                    score = self.model(user_tensor, device_tensor, brand_tensor)
+                    
+                    # 使用sigmoid函数将评分标准化到[0,1]范围
+                    score = torch.sigmoid(score).item()
+                    
+                    # 保存预测结果
+                    device_scores.append({
+                        'device_id': device_id,
+                        'score': score,
+                        'device_info': device_row.to_dict()
+                    })
+                    
+                except ValueError:
+                    # 如果设备ID或品牌不在训练数据中，跳过
+                    continue
+                except Exception as e:
+                    # 其他异常也跳过，避免程序崩溃
+                    logger.warning(f"预测设备 {device_id} 时出错: {e}")
+                    continue
+        
+        # === 第四步：排序和返回TopN ===
+        # 按评分从高到低排序
+        device_scores.sort(key=lambda x: x['score'], reverse=True)
+        
+        # 返回前top_n个设备
+        top_recommendations = device_scores[:top_n]
+        
+        # === 第五步：添加排名信息 ===
+        for i, rec in enumerate(top_recommendations):
+            rec['rank'] = i + 1
+        
+        logger.info(f"为用户 {user_id} 生成了 {len(top_recommendations)} 个推荐")
+        
+        return top_recommendations
+    
+    def get_user_recommendation_summary(self, user_id, device_data, interaction_data=None, top_n=10):
+        """
+        获取用户推荐摘要
+        
+        为用户生成推荐结果的详细摘要，包括推荐设备信息和统计分析。
+        
+        参数:
+            user_id: 用户ID
+            device_data (pandas.DataFrame): 设备数据
+            interaction_data (pandas.DataFrame): 交互数据
+            top_n (int): 推荐设备数量，默认10个
             
-            return recommendations
+        返回:
+            dict: 包含推荐结果和统计信息的字典
+        """
+        # 获取推荐结果
+        recommendations = self.recommend_top_n_devices_for_user(
+            user_id, device_data, interaction_data, top_n
+        )
+        
+        if not recommendations:
+            return {
+                'user_id': user_id,
+                'recommendations': [],
+                'summary': {
+                    'total_recommendations': 0,
+                    'avg_score': 0,
+                    'brand_distribution': {},
+                    'price_range': {'min': 0, 'max': 0, 'avg': 0}
+                }
+            }
+        
+        # === 统计分析 ===
+        scores = [rec['score'] for rec in recommendations]
+        brands = [rec['device_info']['brand'] for rec in recommendations]
+        prices = [rec['device_info']['price'] for rec in recommendations]
+        
+        # 品牌分布统计
+        brand_counts = pd.Series(brands).value_counts().to_dict()
+        
+        # 价格统计
+        price_stats = {
+            'min': min(prices),
+            'max': max(prices),
+            'avg': sum(prices) / len(prices)
+        }
+        
+        # 评分统计
+        avg_score = sum(scores) / len(scores)
+        
+        # 构建摘要
+        summary = {
+            'user_id': user_id,
+            'recommendations': recommendations,
+            'summary': {
+                'total_recommendations': len(recommendations),
+                'avg_score': avg_score,
+                'brand_distribution': brand_counts,
+                'price_range': price_stats,
+                'top_brand': max(brand_counts.items(), key=lambda x: x[1])[0],
+                'score_range': {'min': min(scores), 'max': max(scores)}
+            }
+        }
+        
+        return summary
     
     def recommend_similar_devices(self, device_id, top_k=10):
         """
@@ -867,6 +976,66 @@ def generate_sample_data():
     
     return users, devices, interactions
 
+def simple_recommendation_demo():
+    """
+    简单的推荐演示
+    
+    这个函数展示了如何使用新的用户推荐功能：
+    1. 生成测试数据
+    2. 训练推荐模型
+    3. 为用户推荐Top5设备
+    4. 显示推荐结果
+    """
+    print("=== 简单推荐演示 ===")
+    
+    # 生成测试数据
+    users, devices, interactions = generate_sample_data()
+    
+    # 创建并训练推荐系统
+    recommender = SecondHandRecommendationSystem()
+    print("正在训练推荐模型...")
+    recommender.train(users, devices, interactions, epochs=10)
+    
+    # 为用户推荐设备
+    user_id = 25
+    print(f"\n为用户 {user_id} 推荐设备:")
+    
+    recommendations = recommender.recommend_top_n_devices_for_user(
+        user_id=user_id,
+        device_data=devices,
+        interaction_data=interactions,
+        top_n=5,
+        exclude_interacted=True
+    )
+    
+    if recommendations:
+        print(f"\n推荐结果 (Top 5):")
+        for rec in recommendations:
+            device_info = rec['device_info']
+            print(f"第{rec['rank']}名: 设备{rec['device_id']} | "
+                  f"品牌: {device_info['brand']} | "
+                  f"价格: {device_info['price']:.0f}元 | "
+                  f"成色: {device_info['condition']} | "
+                  f"推荐评分: {rec['score']:.3f}")
+    else:
+        print("没有找到合适的推荐设备")
+    
+    # 显示推荐摘要
+    summary = recommender.get_user_recommendation_summary(
+        user_id=user_id,
+        device_data=devices,
+        interaction_data=interactions,
+        top_n=5
+    )
+    
+    print(f"\n推荐摘要:")
+    print(f"- 推荐设备数量: {summary['summary']['total_recommendations']}")
+    print(f"- 平均推荐评分: {summary['summary']['avg_score']:.3f}")
+    print(f"- 最受推荐的品牌: {summary['summary']['top_brand']}")
+    print(f"- 价格范围: {summary['summary']['price_range']['min']:.0f} - {summary['summary']['price_range']['max']:.0f}元")
+    print(f"- 平均价格: {summary['summary']['price_range']['avg']:.0f}元")
+    
+
 def main():
     """
     主函数 - 演示推荐系统的完整功能
@@ -898,21 +1067,57 @@ def main():
     recommender.train(users, devices, interactions, epochs=20)
     
     # === 第四步：测试推荐功能 ===
-    # 测试相似设备推荐
+    
+    # 测试1：用户个性化推荐
+    test_user_id = 12
+    user_recommendations = recommender.recommend_top_n_devices_for_user(
+        user_id=test_user_id, 
+        device_data=devices, 
+        interaction_data=interactions, 
+        top_n=5,
+        exclude_interacted=True
+    )
+    
+    logger.info(f"\n=== 为用户 {test_user_id} 推荐的Top5设备 ===")
+    for rec in user_recommendations:
+        device_info = rec['device_info']
+        logger.info(f"排名{rec['rank']}: 设备{rec['device_id']} | 品牌: {device_info['brand']} | "
+                   f"价格: {device_info['price']:.0f}元 | 评分: {rec['score']:.3f}")
+    
+    # 测试2：获取用户推荐摘要
+    recommendation_summary = recommender.get_user_recommendation_summary(
+        user_id=test_user_id,
+        device_data=devices,
+        interaction_data=interactions,
+        top_n=5
+    )
+    
+    logger.info(f"\n=== 用户 {test_user_id} 推荐摘要 ===")
+    summary = recommendation_summary['summary']
+    logger.info(f"推荐设备数量: {summary['total_recommendations']}")
+    logger.info(f"平均评分: {summary['avg_score']:.3f}")
+    logger.info(f"最喜欢的品牌: {summary['top_brand']}")
+    logger.info(f"价格范围: {summary['price_range']['min']:.0f} - {summary['price_range']['max']:.0f}元")
+    logger.info(f"平均价格: {summary['price_range']['avg']:.0f}元")
+    
+    # 测试3：相似设备推荐
     test_device_id = 0
     similar_devices = recommender.recommend_similar_devices(test_device_id, top_k=5)
     
-    logger.info(f"与设备 {test_device_id} 相似的设备: {similar_devices}")
+    logger.info(f"\n=== 与设备 {test_device_id} 相似的设备 ===")
     
-    # === 第五步：显示推荐结果 ===
     # 显示目标设备信息
     test_device = devices[devices['device_id'] == test_device_id].iloc[0]
-    logger.info(f"测试设备信息: 品牌={test_device['brand']}, 价格={test_device['price']:.0f}")
+    logger.info(f"目标设备: 品牌={test_device['brand']}, 价格={test_device['price']:.0f}元")
     
     # 显示相似设备信息
-    for device_id in similar_devices[:3]:
+    for i, device_id in enumerate(similar_devices[:3]):
         device_info = devices[devices['device_id'] == device_id].iloc[0]
-        logger.info(f"相似设备 {device_id}: 品牌={device_info['brand']}, 价格={device_info['price']:.0f}")
+        logger.info(f"相似设备{i+1}: 设备{device_id} | 品牌={device_info['brand']}, 价格={device_info['price']:.0f}元")
 
 if __name__ == "__main__":
-    main() 
+    # 运行完整演示
+    main()
+    
+    # 也可以运行简单演示
+    # simple_recommendation_demo() 
