@@ -878,6 +878,107 @@ class SecondHandRecommendationSystem:
         
         return summary
     
+    def print_user_interaction_history(self, user_id, device_data, interaction_data):
+        """
+        打印用户的历史交互设备记录
+        
+        使用logger打印指定用户的所有历史交互记录，包括设备详细信息、
+        交互评分、交互时间等。这有助于了解用户的购买偏好和行为模式。
+        
+        参数:
+            user_id: 用户ID
+            device_data (pandas.DataFrame): 设备数据，包含device_id、brand、price等信息
+            interaction_data (pandas.DataFrame): 交互数据，包含user_id、device_id、rating等信息
+            
+        功能:
+            - 查找用户的所有历史交互记录
+            - 关联设备详细信息
+            - 按评分排序显示
+            - 提供统计摘要
+        """
+        if interaction_data is None:
+            logger.warning(f"交互数据为空，无法查询用户 {user_id} 的历史记录")
+            return
+        
+        # === 第一步：查找用户的历史交互记录 ===
+        user_interactions = interaction_data[interaction_data['user_id'] == user_id].copy()
+        
+        if len(user_interactions) == 0:
+            logger.info(f"用户 {user_id} 没有历史交互记录")
+            return
+        
+        # === 第二步：关联设备详细信息 ===
+        # 将交互数据与设备数据合并，获取完整的设备信息
+        user_history = user_interactions.merge(device_data, on='device_id', how='left')
+        
+        # 按评分从高到低排序
+        user_history = user_history.sort_values('rating', ascending=False)
+        
+        # === 第三步：使用logger打印详细历史记录 ===
+        logger.info(f"\n=== 用户 {user_id} 的历史交互设备记录 ===")
+        logger.info(f"总交互设备数量: {len(user_history)}")
+        
+        # 打印每个交互记录的详细信息
+        for idx, (_, record) in enumerate(user_history.iterrows(), 1):
+            device_id = record['device_id']
+            rating = record['rating']
+            brand = record.get('brand', '未知品牌')
+            price = record.get('price', 0)
+            condition = record.get('condition', '未知成色')
+            
+            logger.info(f"第{idx}条记录: 设备{device_id} | 评分: {rating} | "
+                       f"品牌: {brand} | 价格: {price:.0f}元 | 成色: {condition}")
+        
+        # === 第四步：统计分析 ===
+        # 计算用户的购买偏好统计
+        avg_rating = user_history['rating'].mean()
+        max_rating = user_history['rating'].max()
+        min_rating = user_history['rating'].min()
+        
+        # 品牌偏好统计
+        brand_counts = user_history['brand'].value_counts()
+        most_liked_brand = brand_counts.index[0] if len(brand_counts) > 0 else "无"
+        
+        # 价格偏好统计
+        avg_price = user_history['price'].mean()
+        max_price = user_history['price'].max()
+        min_price = user_history['price'].min()
+        
+        # 成色偏好统计
+        condition_counts = user_history['condition'].value_counts()
+        preferred_condition = condition_counts.index[0] if len(condition_counts) > 0 else "无"
+        
+        # === 第五步：打印统计摘要 ===
+        logger.info(f"\n=== 用户 {user_id} 的购买偏好分析 ===")
+        logger.info(f"平均评分: {avg_rating:.2f} (范围: {min_rating} - {max_rating})")
+        logger.info(f"最喜欢的品牌: {most_liked_brand} (共{brand_counts.iloc[0]}次交互)")
+        logger.info(f"平均价格: {avg_price:.0f}元 (范围: {min_price:.0f} - {max_price:.0f}元)")
+        logger.info(f"偏好成色: {preferred_condition} (共{condition_counts.iloc[0]}次选择)")
+        
+        # 品牌分布详情
+        logger.info(f"\n品牌偏好分布:")
+        for brand, count in brand_counts.head(5).items():
+            percentage = (count / len(user_history)) * 100
+            logger.info(f"  {brand}: {count}次 ({percentage:.1f}%)")
+        
+        # 评分分布
+        rating_distribution = user_history['rating'].value_counts().sort_index()
+        logger.info(f"\n评分分布:")
+        for rating, count in rating_distribution.items():
+            percentage = (count / len(user_history)) * 100
+            logger.info(f"  {rating}分: {count}次 ({percentage:.1f}%)")
+        
+        # === 第六步：高评分设备推荐 ===
+        # 找出用户评分最高的设备，作为偏好参考
+        high_rated_devices = user_history[user_history['rating'] >= 4]
+        if len(high_rated_devices) > 0:
+            logger.info(f"\n用户高评分设备 (评分>=4):")
+            for _, device in high_rated_devices.head(3).iterrows():
+                logger.info(f"  设备{device['device_id']}: {device['brand']} | "
+                           f"评分{device['rating']} | 价格{device['price']:.0f}元")
+        
+        logger.info("=" * 50)
+    
     def recommend_similar_devices(self, device_id, top_k=10):
         """
         推荐相似设备
@@ -976,6 +1077,46 @@ def generate_sample_data():
     
     return users, devices, interactions
 
+def user_history_demo():
+    """
+    用户历史记录演示
+    
+    这个函数专门演示如何查看和分析用户的历史交互记录：
+    1. 生成测试数据
+    2. 训练推荐模型
+    3. 查看用户历史交互记录
+    4. 分析用户购买偏好
+    """
+    print("=== 用户历史记录演示 ===")
+    
+    # 生成测试数据
+    users, devices, interactions = generate_sample_data()
+    
+    # 创建并训练推荐系统
+    recommender = SecondHandRecommendationSystem()
+    print("正在训练推荐模型...")
+    recommender.train(users, devices, interactions, epochs=5)
+    
+    # 选择几个不同的用户进行演示
+    test_users = [12, 25, 50, 100]
+    
+    for user_id in test_users:
+        print(f"\n{'='*60}")
+        print(f"正在查看用户 {user_id} 的历史记录...")
+        
+        # 打印用户历史交互记录
+        recommender.print_user_interaction_history(
+            user_id=user_id,
+            device_data=devices,
+            interaction_data=interactions
+        )
+        
+        # 简单暂停，让用户能看清楚每个用户的信息
+        input("按回车键继续查看下一个用户...")
+    
+    print("\n用户历史记录演示完成！")
+
+
 def simple_recommendation_demo():
     """
     简单的推荐演示
@@ -998,8 +1139,17 @@ def simple_recommendation_demo():
     
     # 为用户推荐设备
     user_id = 25
-    print(f"\n为用户 {user_id} 推荐设备:")
     
+    # 首先打印用户历史交互记录
+    print(f"\n=== 用户 {user_id} 的历史记录 ===")
+    recommender.print_user_interaction_history(
+        user_id=user_id,
+        device_data=devices,
+        interaction_data=interactions
+    )
+    
+    # 然后进行个性化推荐
+    print(f"\n为用户 {user_id} 推荐设备:")
     recommendations = recommender.recommend_top_n_devices_for_user(
         user_id=user_id,
         device_data=devices,
@@ -1068,8 +1218,15 @@ def main():
     
     # === 第四步：测试推荐功能 ===
     
-    # 测试1：用户个性化推荐
+    # 测试1：打印用户历史交互记录
     test_user_id = 12
+    recommender.print_user_interaction_history(
+        user_id=test_user_id,
+        device_data=devices,
+        interaction_data=interactions
+    )
+    
+    # 测试2：用户个性化推荐
     user_recommendations = recommender.recommend_top_n_devices_for_user(
         user_id=test_user_id, 
         device_data=devices, 
@@ -1084,7 +1241,7 @@ def main():
         logger.info(f"排名{rec['rank']}: 设备{rec['device_id']} | 品牌: {device_info['brand']} | "
                    f"价格: {device_info['price']:.0f}元 | 评分: {rec['score']:.3f}")
     
-    # 测试2：获取用户推荐摘要
+    # 测试3：获取用户推荐摘要
     recommendation_summary = recommender.get_user_recommendation_summary(
         user_id=test_user_id,
         device_data=devices,
@@ -1100,7 +1257,7 @@ def main():
     logger.info(f"价格范围: {summary['price_range']['min']:.0f} - {summary['price_range']['max']:.0f}元")
     logger.info(f"平均价格: {summary['price_range']['avg']:.0f}元")
     
-    # 测试3：相似设备推荐
+    # 测试4：相似设备推荐
     test_device_id = 0
     similar_devices = recommender.recommend_similar_devices(test_device_id, top_k=5)
     
@@ -1119,5 +1276,6 @@ if __name__ == "__main__":
     # 运行完整演示
     main()
     
-    # 也可以运行简单演示
-    # simple_recommendation_demo() 
+    # 也可以运行其他演示
+    # simple_recommendation_demo()    # 简单推荐演示
+    # user_history_demo()            # 用户历史记录演示 
