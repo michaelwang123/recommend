@@ -1224,19 +1224,30 @@ def generate_sample_data():
     interactions = pd.DataFrame(interactions_data)
     
     # === 数据统计信息 ===
-    logger.info(f"数据生成完成:")
-    logger.info(f"  用户数量: {len(users)}")
-    logger.info(f"  设备数量: {len(devices)}")
-    logger.info(f"  交互数量: {len(interactions)}")
-    logger.info(f"  平均每用户交互数: {len(interactions) / len(users):.1f}")
+    logger.info(f"\n{'='*50}")
+    logger.info(f"📊 数据生成完成!")
+    logger.info(f"{'='*50}")
+    logger.info(f"👥 用户数量: {len(users):,}")
+    logger.info(f"📱 设备数量: {len(devices):,}")
+    logger.info(f"🔄 交互数量: {len(interactions):,}")
+    logger.info(f"📈 平均每用户交互数: {len(interactions) / len(users):.1f}")
     
     # 品牌分布统计
     brand_dist = interactions.merge(devices, on='device_id')['brand'].value_counts()
-    logger.info(f"  品牌交互分布: {dict(brand_dist)}")
+    logger.info(f"\n🏷️ 品牌交互分布:")
+    for brand, count in brand_dist.items():
+        percentage = (count / len(interactions)) * 100
+        logger.info(f"  📱 {brand}: {count:,}次 ({percentage:.1f}%)")
     
     # 评分分布统计
     rating_dist = interactions['rating'].value_counts().sort_index()
-    logger.info(f"  评分分布: {dict(rating_dist)}")
+    logger.info(f"\n⭐ 评分分布:")
+    for rating, count in rating_dist.items():
+        percentage = (count / len(interactions)) * 100
+        stars = "⭐" * int(rating)
+        logger.info(f"  {stars} {rating}分: {count:,}次 ({percentage:.1f}%)")
+    
+    logger.info(f"{'='*50}")
     
     return users, devices, interactions
 
