@@ -1093,7 +1093,16 @@ class SecondHandRecommendationSystem:
         return similar_devices
 
 def generate_sample_data():
-    """生成示例数据"""
+    """
+    生成更真实的示例数据
+    
+    改进点：
+    1. 为每个用户生成品牌偏好
+    2. 根据用户偏好生成交互数据
+    3. 偏好品牌的评分更高
+    4. 价格偏好与品牌偏好相关
+    5. 增加用户年龄对品牌偏好的影响
+    """
     np.random.seed(42)
     
     # 用户数据
@@ -1103,26 +1112,240 @@ def generate_sample_data():
         'age': np.random.randint(18, 65, n_users)
     })
     
-    # 设备数据
+    # 设备数据 - 更真实的品牌分布和价格范围
     n_devices = 200
     brands = ['苹果', '华为', '小米', '三星', '联想']
     
-    devices = pd.DataFrame({
-        'device_id': range(n_devices),
-        'brand': np.random.choice(brands, n_devices),
-        'price': np.random.uniform(500, 5000, n_devices),
-        'condition': np.random.choice(['全新', '九成新', '八成新'], n_devices)
-    })
+    # 不同品牌的价格范围更真实
+    brand_price_ranges = {
+        '苹果': (3000, 8000),
+        '华为': (2000, 6000),
+        '三星': (1500, 5000),
+        '小米': (1000, 4000),
+        '联想': (800, 3500)
+    }
     
-    # 交互数据
-    n_interactions = 2000
-    interactions = pd.DataFrame({
-        'user_id': np.random.randint(0, n_users, n_interactions),
-        'device_id': np.random.randint(0, n_devices, n_interactions),
-        'rating': np.random.randint(1, 6, n_interactions)
-    })
+    devices_data = []
+    for device_id in range(n_devices):
+        brand = np.random.choice(brands)
+        price_min, price_max = brand_price_ranges[brand]
+        price = np.random.uniform(price_min, price_max)
+        
+        devices_data.append({
+            'device_id': device_id,
+            'brand': brand,
+            'price': price,
+            'condition': np.random.choice(['全新', '九成新', '八成新'], p=[0.2, 0.5, 0.3])
+        })
+    
+    devices = pd.DataFrame(devices_data)
+    
+    # === 生成用户品牌偏好 ===
+    logger.info("生成用户品牌偏好...")
+    user_brand_preferences = {}
+    
+    for user_id in range(n_users):
+        user_age = users.loc[user_id, 'age']
+        
+        # 根据年龄影响品牌偏好
+        if user_age < 25:
+            # 年轻用户偏好小米、华为
+            preferred_brands = np.random.choice(['小米', '华为', '三星'], 
+                                              size=np.random.randint(1, 3), 
+                                              replace=False,
+                                              p=[0.4, 0.4, 0.2])
+        elif user_age < 35:
+            # 中年用户偏好华为、三星、苹果
+            preferred_brands = np.random.choice(['华为', '三星', '苹果'], 
+                                              size=np.random.randint(1, 3), 
+                                              replace=False,
+                                              p=[0.4, 0.3, 0.3])
+        else:
+            # 成熟用户偏好苹果、联想、华为
+            preferred_brands = np.random.choice(['苹果', '联想', '华为'], 
+                                              size=np.random.randint(1, 2), 
+                                              replace=False,
+                                              p=[0.5, 0.3, 0.2])
+        
+        user_brand_preferences[user_id] = preferred_brands
+    
+    # === 根据用户偏好生成交互数据 ===
+    logger.info("根据用户偏好生成交互数据...")
+    interactions_data = []
+    
+    for user_id in range(n_users):
+        preferred_brands = user_brand_preferences[user_id]
+        user_age = users.loc[user_id, 'age']
+        
+        # 根据年龄决定交互数量（年轻人更活跃）
+        if user_age < 30:
+            n_user_interactions = np.random.randint(5, 12)
+        elif user_age < 45:
+            n_user_interactions = np.random.randint(3, 8)
+        else:
+            n_user_interactions = np.random.randint(2, 6)
+        
+        for _ in range(n_user_interactions):
+            # 80%概率选择偏好品牌的设备
+            if np.random.random() < 0.8:
+                # 选择偏好品牌的设备
+                preferred_devices = devices[devices['brand'].isin(preferred_brands)]
+                if len(preferred_devices) > 0:
+                    device = preferred_devices.sample(1).iloc[0]
+                    # 偏好品牌的评分更高（3-5分）
+                    rating = np.random.randint(3, 6)
+                    
+                    # 如果是最喜欢的品牌，评分更高
+                    if device['brand'] == preferred_brands[0]:
+                        rating = np.random.randint(4, 6)
+                else:
+                    # 如果没有偏好品牌的设备，随机选择
+                    device = devices.sample(1).iloc[0]
+                    rating = np.random.randint(2, 5)
+            else:
+                # 20%概率选择非偏好品牌的设备
+                non_preferred_devices = devices[~devices['brand'].isin(preferred_brands)]
+                if len(non_preferred_devices) > 0:
+                    device = non_preferred_devices.sample(1).iloc[0]
+                    # 非偏好品牌的评分较低（1-3分）
+                    rating = np.random.randint(1, 4)
+                else:
+                    device = devices.sample(1).iloc[0]
+                    rating = np.random.randint(1, 4)
+            
+            interactions_data.append({
+                'user_id': user_id,
+                'device_id': device['device_id'],
+                'rating': rating
+            })
+    
+    interactions = pd.DataFrame(interactions_data)
+    
+    # === 数据统计信息 ===
+    logger.info(f"数据生成完成:")
+    logger.info(f"  用户数量: {len(users)}")
+    logger.info(f"  设备数量: {len(devices)}")
+    logger.info(f"  交互数量: {len(interactions)}")
+    logger.info(f"  平均每用户交互数: {len(interactions) / len(users):.1f}")
+    
+    # 品牌分布统计
+    brand_dist = interactions.merge(devices, on='device_id')['brand'].value_counts()
+    logger.info(f"  品牌交互分布: {dict(brand_dist)}")
+    
+    # 评分分布统计
+    rating_dist = interactions['rating'].value_counts().sort_index()
+    logger.info(f"  评分分布: {dict(rating_dist)}")
     
     return users, devices, interactions
+
+def analyze_generated_data(users, devices, interactions):
+    """
+    分析生成的数据质量和用户偏好分布
+    
+    这个函数用于验证生成的数据是否符合预期的用户偏好模式
+    """
+    logger.info("\n=== 数据质量分析 ===")
+    
+    # 合并数据以便分析
+    interaction_with_device = interactions.merge(devices, on='device_id')
+    
+    # 1. 用户品牌偏好分析
+    logger.info("1. 用户品牌偏好分析:")
+    user_brand_stats = interaction_with_device.groupby(['user_id', 'brand']).agg({
+        'rating': ['count', 'mean']
+    }).reset_index()
+    user_brand_stats.columns = ['user_id', 'brand', 'interaction_count', 'avg_rating']
+    
+    # 找出每个用户最喜欢的品牌
+    user_favorite_brands = user_brand_stats.loc[user_brand_stats.groupby('user_id')['avg_rating'].idxmax()]
+    
+    # 统计品牌忠诚度
+    brand_loyalty = user_favorite_brands['brand'].value_counts()
+    logger.info(f"  品牌忠诚度分布: {dict(brand_loyalty)}")
+    
+    # 2. 评分质量分析
+    logger.info("2. 评分质量分析:")
+    
+    # 计算每个用户对偏好品牌vs非偏好品牌的平均评分
+    user_brand_preference_scores = []
+    
+    for user_id in interactions['user_id'].unique():
+        user_interactions = interaction_with_device[interaction_with_device['user_id'] == user_id]
+        
+        if len(user_interactions) < 2:
+            continue
+            
+        # 找出用户最常交互的品牌
+        brand_counts = user_interactions['brand'].value_counts()
+        if len(brand_counts) == 0:
+            continue
+            
+        favorite_brand = brand_counts.index[0]
+        
+        # 计算对偏好品牌和非偏好品牌的平均评分
+        preferred_ratings = user_interactions[user_interactions['brand'] == favorite_brand]['rating']
+        non_preferred_ratings = user_interactions[user_interactions['brand'] != favorite_brand]['rating']
+        
+        if len(preferred_ratings) > 0 and len(non_preferred_ratings) > 0:
+            user_brand_preference_scores.append({
+                'user_id': user_id,
+                'favorite_brand': favorite_brand,
+                'preferred_avg_rating': preferred_ratings.mean(),
+                'non_preferred_avg_rating': non_preferred_ratings.mean(),
+                'rating_difference': preferred_ratings.mean() - non_preferred_ratings.mean()
+            })
+    
+    if user_brand_preference_scores:
+        preference_df = pd.DataFrame(user_brand_preference_scores)
+        avg_preferred_rating = preference_df['preferred_avg_rating'].mean()
+        avg_non_preferred_rating = preference_df['non_preferred_avg_rating'].mean()
+        avg_rating_difference = preference_df['rating_difference'].mean()
+        
+        logger.info(f"  偏好品牌平均评分: {avg_preferred_rating:.2f}")
+        logger.info(f"  非偏好品牌平均评分: {avg_non_preferred_rating:.2f}")
+        logger.info(f"  评分差异: {avg_rating_difference:.2f}")
+        
+        # 统计有多少用户对偏好品牌评分更高
+        positive_preference_users = len(preference_df[preference_df['rating_difference'] > 0])
+        total_users = len(preference_df)
+        logger.info(f"  偏好品牌评分更高的用户比例: {positive_preference_users}/{total_users} ({positive_preference_users/total_users*100:.1f}%)")
+    
+    # 3. 年龄与品牌偏好关系分析
+    logger.info("3. 年龄与品牌偏好关系:")
+    
+    # 合并用户年龄信息
+    user_age_brand = user_favorite_brands.merge(users[['user_id', 'age']], on='user_id')
+    
+    # 按年龄段分析品牌偏好
+    age_groups = [
+        (18, 25, "年轻用户"),
+        (25, 35, "中年用户"),
+        (35, 65, "成熟用户")
+    ]
+    
+    for min_age, max_age, group_name in age_groups:
+        group_users = user_age_brand[(user_age_brand['age'] >= min_age) & (user_age_brand['age'] < max_age)]
+        if len(group_users) > 0:
+            brand_dist = group_users['brand'].value_counts()
+            logger.info(f"  {group_name} ({min_age}-{max_age}岁): {dict(brand_dist)}")
+    
+    # 4. 价格偏好分析
+    logger.info("4. 价格偏好分析:")
+    
+    # 计算每个品牌的平均价格
+    brand_avg_prices = devices.groupby('brand')['price'].mean().sort_values(ascending=False)
+    logger.info(f"  品牌平均价格排序: {dict(brand_avg_prices.round(0))}")
+    
+    # 计算用户交互的平均价格
+    user_avg_prices = interaction_with_device.groupby('user_id')['price'].mean()
+    logger.info(f"  用户平均交互价格: {user_avg_prices.mean():.0f}元 (标准差: {user_avg_prices.std():.0f}元)")
+    
+    return {
+        'brand_loyalty': dict(brand_loyalty),
+        'preference_scores': user_brand_preference_scores,
+        'age_brand_preference': user_age_brand,
+        'brand_avg_prices': dict(brand_avg_prices)
+    }
 
 def user_history_demo():
     """
@@ -1254,6 +1477,9 @@ def main():
     logger.info(f"用户数量: {len(users)}")
     logger.info(f"设备数量: {len(devices)}")
     logger.info(f"交互数量: {len(interactions)}")
+    
+    # === 数据质量分析 ===
+    analyze_generated_data(users, devices, interactions)
     
     # === 第二步：创建推荐系统 ===
     # 初始化推荐系统实例
