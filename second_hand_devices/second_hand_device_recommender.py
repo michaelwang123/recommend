@@ -706,7 +706,7 @@ class SecondHandRecommendationSystem:
                 logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}")
     
     
-    def recommend_top_n_devices_for_user(self, user_id, device_data, interaction_data=None, top_n=10, exclude_interacted=True):
+    def recommend_top_n_devices_for_user(self, user_id, device_data, interaction_data=None, top_n=10, exclude_interacted=True, brand_weight=0.02):
         """
         为指定用户推荐TopN个设备（改进版）
         
@@ -723,6 +723,7 @@ class SecondHandRecommendationSystem:
             interaction_data (pandas.DataFrame): 交互数据，用于过滤已交互设备
             top_n (int): 推荐设备数量，默认10个
             exclude_interacted (bool): 是否排除用户已交互的设备，默认True
+            brand_weight (float): 品牌偏好权重，默认0.02（2%），设为0则完全依赖模型学习
             
         返回:
             list: 推荐结果列表，每个元素包含设备ID、评分、设备详细信息
@@ -805,11 +806,12 @@ class SecondHandRecommendationSystem:
                     # 使用sigmoid函数将评分标准化到[0,1]范围
                     score = torch.sigmoid(score).item()
                     
-                    # === 添加品牌偏好权重 ===
+                    # === 添加品牌偏好权重（学习用，可配置）===
                     brand = device_row['brand']
-                    if brand in user_brand_preferences:
-                        # 如果用户历史上偏好这个品牌，给予额外权重
-                        brand_bonus = user_brand_preferences[brand] * 0.1  # 最多增加10%的分数
+                    if brand_weight > 0 and brand in user_brand_preferences:
+                        # 如果用户历史上偏好这个品牌，给予少量额外权重
+                        # 权重可配置：brand_weight=0.02（2%），brand_weight=0则完全依赖模型学习
+                        brand_bonus = user_brand_preferences[brand] * brand_weight
                         score = min(1.0, score + brand_bonus)  # 确保分数不超过1.0
                     
                     # 保存预测结果
@@ -1456,6 +1458,82 @@ def simple_recommendation_demo():
     print(f"- 平均价格: {summary['summary']['price_range']['avg']:.0f}元")
     
 
+def brand_weight_comparison_demo():
+    """
+    品牌权重对比演示
+    
+    这个函数展示不同品牌权重设置对推荐结果的影响，
+    帮助理解模型学习vs规则增强的平衡点。
+    """
+    logger.info("\n" + "="*60)
+    logger.info("=== 品牌权重对比演示 ===")
+    logger.info("="*60)
+    
+    # 生成测试数据
+    users, devices, interactions = generate_sample_data()
+    
+    # 创建并训练推荐系统
+    recommender = SecondHandRecommendationSystem()
+    logger.info("正在训练推荐模型...")
+    recommender.train(users, devices, interactions, epochs=20)
+    
+    # 选择一个有明确品牌偏好的用户进行测试
+    test_user_id = 12
+    
+    # 显示用户历史记录
+    logger.info(f"\n=== 测试用户 {test_user_id} 的历史记录 ===")
+    recommender.print_user_interaction_history(
+        user_id=test_user_id,
+        device_data=devices,
+        interaction_data=interactions
+    )
+    
+    # 测试不同的品牌权重设置
+    weight_settings = [
+        (0.0, "完全依赖模型学习"),
+        (0.01, "微量品牌偏好增强（1%）"),
+        (0.02, "少量品牌偏好增强（2%）"),
+        (0.05, "中等品牌偏好增强（5%）"),
+        (0.1, "强品牌偏好增强（10%）")
+    ]
+    
+    logger.info(f"\n=== 不同品牌权重设置的推荐结果对比 ===")
+    
+    for weight, description in weight_settings:
+        logger.info(f"\n📊 {description} (brand_weight={weight})")
+        logger.info("-" * 50)
+        
+        recommendations = recommender.recommend_top_n_devices_for_user(
+            user_id=test_user_id,
+            device_data=devices,
+            interaction_data=interactions,
+            top_n=5,
+            exclude_interacted=True,
+            brand_weight=weight
+        )
+        
+        if recommendations:
+            # 统计推荐结果中的品牌分布
+            brands = [rec['device_info']['brand'] for rec in recommendations]
+            brand_counts = pd.Series(brands).value_counts()
+            
+            logger.info(f"推荐品牌分布: {dict(brand_counts)}")
+            
+            # 显示详细推荐结果
+            for i, rec in enumerate(recommendations, 1):
+                device_info = rec['device_info']
+                logger.info(f"  {i}. 设备{rec['device_id']} | 品牌:{device_info['brand']} | "
+                           f"价格:{device_info['price']:.0f}元 | 评分:{rec['score']:.3f}")
+        else:
+            logger.info("  没有推荐结果")
+    
+    logger.info(f"\n=== 权重设置建议 ===")
+    logger.info("📝 学习要点:")
+    logger.info("  • brand_weight=0.0: 完全依赖深度学习模型，适合高质量训练数据")
+    logger.info("  • brand_weight=0.01-0.02: 轻微增强，平衡模型学习和用户偏好")
+    logger.info("  • brand_weight=0.05-0.1: 强化用户偏好，适合数据稀疏场景")
+    logger.info("  • 实际应用中，可以根据用户交互数据量动态调整权重")
+
 def main():
     """
     主函数 - 演示推荐系统的完整功能
@@ -1499,13 +1577,14 @@ def main():
         interaction_data=interactions
     )
     
-    # 测试2：用户个性化推荐
+    # 测试2：用户个性化推荐（使用减少的权重）
     user_recommendations = recommender.recommend_top_n_devices_for_user(
         user_id=test_user_id, 
         device_data=devices, 
         interaction_data=interactions, 
         top_n=5,
-        exclude_interacted=True
+        exclude_interacted=True,
+        brand_weight=0.02  # 使用减少的权重
     )
     
     logger.info(f"\n=== 为用户 {test_user_id} 推荐的Top5设备 ===")
@@ -1514,7 +1593,7 @@ def main():
         logger.info(f"排名{rec['rank']}: 设备{rec['device_id']} | 品牌: {device_info['brand']} | "
                    f"价格: {device_info['price']:.0f}元 | 评分: {rec['score']:.3f}")
     
-    # 测试3：获取用户推荐摘要
+    # 测试3：推荐摘要
     recommendation_summary = recommender.get_user_recommendation_summary(
         user_id=test_user_id,
         device_data=devices,
@@ -1536,18 +1615,18 @@ def main():
     similar_devices = recommender.recommend_similar_devices(test_device_id, top_k=5)
     
     logger.info(f"\n=== 与设备 {test_device_id} 相似的设备 ===")
+    target_device = devices[devices['device_id'] == test_device_id].iloc[0]
+    logger.info(f"目标设备: 品牌={target_device['brand']}, 价格={target_device['price']:.0f}元")
     
-    # 显示目标设备信息
-    test_device = devices[devices['device_id'] == test_device_id].iloc[0]
-    logger.info(f"目标设备: 品牌={test_device['brand']}, 价格={test_device['price']:.0f}元")
-    
-    # 显示相似设备信息
-    for i, device_id in enumerate(similar_devices[:3]):
+    for i, device_id in enumerate(similar_devices, 1):
         device_info = devices[devices['device_id'] == device_id].iloc[0]
-        logger.info(f"相似设备{i+1}: 设备{device_id} | 品牌={device_info['brand']}, 价格={device_info['price']:.0f}元")
+        logger.info(f"相似设备{i}: 设备{device_id} | 品牌={device_info['brand']}, 价格={device_info['price']:.0f}元")
+    
+    # === 第五步：品牌权重对比演示 ===
+    brand_weight_comparison_demo()
+
 
 if __name__ == "__main__":
-    # 运行完整演示
     main()
     
     # 也可以运行其他演示
