@@ -752,7 +752,30 @@ class SecondHandRecommendationSystem:
             user_interactions = interaction_data[interaction_data['user_id'] == user_id]
             interacted_devices = set(user_interactions['device_id'].values)
         
-        # === 第三步：批量预测所有设备评分 ===
+        # === 第三步：获取用户历史偏好品牌 ===
+        user_brand_preferences = {}
+        if interaction_data is not None:
+            user_interactions = interaction_data[interaction_data['user_id'] == user_id]
+            if not user_interactions.empty:
+                # 合并设备信息以获取品牌
+                interactions_with_brands = user_interactions.merge(
+                    device_data[['device_id', 'brand']], 
+                    on='device_id', 
+                    how='left'
+                )
+                # 统计用户对各品牌的偏好（基于交互次数和平均评分）
+                brand_stats = interactions_with_brands.groupby('brand').agg({
+                    'rating': ['count', 'mean']
+                }).reset_index()
+                brand_stats.columns = ['brand', 'interaction_count', 'avg_rating']
+                
+                # 计算品牌偏好权重（交互次数 * 平均评分）
+                for _, row in brand_stats.iterrows():
+                    brand = row['brand']
+                    weight = row['interaction_count'] * row['avg_rating'] / 5.0  # 归一化到[0,1]
+                    user_brand_preferences[brand] = weight
+        
+        # === 第四步：批量预测所有设备评分 ===
         self.model.eval()  # 设置为评估模式
         device_scores = []
         
@@ -781,6 +804,13 @@ class SecondHandRecommendationSystem:
                     
                     # 使用sigmoid函数将评分标准化到[0,1]范围
                     score = torch.sigmoid(score).item()
+                    
+                    # === 添加品牌偏好权重 ===
+                    brand = device_row['brand']
+                    if brand in user_brand_preferences:
+                        # 如果用户历史上偏好这个品牌，给予额外权重
+                        brand_bonus = user_brand_preferences[brand] * 0.1  # 最多增加10%的分数
+                        score = min(1.0, score + brand_bonus)  # 确保分数不超过1.0
                     
                     # 保存预测结果
                     device_scores.append({
@@ -849,7 +879,7 @@ class SecondHandRecommendationSystem:
         brands = [rec['device_info']['brand'] for rec in recommendations]
         prices = [rec['device_info']['price'] for rec in recommendations]
         
-        # 品牌分布统计
+        # 推荐结果中的品牌分布统计
         brand_counts = pd.Series(brands).value_counts().to_dict()
         
         # 价格统计
@@ -862,6 +892,22 @@ class SecondHandRecommendationSystem:
         # 评分统计
         avg_score = sum(scores) / len(scores)
         
+        # === 获取用户历史偏好的品牌（基于交互数据）===
+        user_favorite_brand = "未知"
+        if interaction_data is not None:
+            user_interactions = interaction_data[interaction_data['user_id'] == user_id]
+            if not user_interactions.empty:
+                # 合并设备信息以获取品牌
+                interactions_with_brands = user_interactions.merge(
+                    device_data[['device_id', 'brand']], 
+                    on='device_id', 
+                    how='left'
+                )
+                # 统计用户历史交互的品牌分布
+                historical_brands = interactions_with_brands['brand'].value_counts()
+                if not historical_brands.empty:
+                    user_favorite_brand = historical_brands.index[0]  # 最常交互的品牌
+        
         # 构建摘要
         summary = {
             'user_id': user_id,
@@ -871,7 +917,8 @@ class SecondHandRecommendationSystem:
                 'avg_score': avg_score,
                 'brand_distribution': brand_counts,
                 'price_range': price_stats,
-                'top_brand': max(brand_counts.items(), key=lambda x: x[1])[0],
+                'top_brand': max(brand_counts.items(), key=lambda x: x[1])[0],  # 推荐结果中最多的品牌
+                'user_favorite_brand': user_favorite_brand,  # 用户历史偏好的品牌
                 'score_range': {'min': min(scores), 'max': max(scores)}
             }
         }
@@ -1253,7 +1300,8 @@ def main():
     summary = recommendation_summary['summary']
     logger.info(f"推荐设备数量: {summary['total_recommendations']}")
     logger.info(f"平均评分: {summary['avg_score']:.3f}")
-    logger.info(f"最喜欢的品牌: {summary['top_brand']}")
+    logger.info(f"用户历史偏好品牌: {summary['user_favorite_brand']}")
+    logger.info(f"推荐结果中最多品牌: {summary['top_brand']}")
     logger.info(f"价格范围: {summary['price_range']['min']:.0f} - {summary['price_range']['max']:.0f}元")
     logger.info(f"平均价格: {summary['price_range']['avg']:.0f}元")
     
